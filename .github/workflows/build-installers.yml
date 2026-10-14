@@ -31,8 +31,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-windows7.txt pyinstaller==5.13.2
           pyinstaller --clean --noconfirm desktop/windows7-ia32/bsch-server.spec
-          New-Item -ItemType Directory -Force desktop/windows7-ia32/server | Out-Null
-          Copy-Item dist/bsch-server.exe desktop/windows7-ia32/server/bsch-server.exe
+          New-Item -ItemType Directory -Force desktop/windows7-ia32/server/bsch-server | Out-Null
+          Copy-Item -Recurse dist/bsch-server/* desktop/windows7-ia32/server/bsch-server/
       - uses: actions/setup-node@v4
         with: {node-version: '16'}
       - run: npm ci

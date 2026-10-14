@@ -20,7 +20,7 @@ public class MainActivity extends Activity {
         s.setAllowUniversalAccessFromFileURLs(true);
         web.setWebViewClient(new WebViewClient());
         setContentView(web);
-        web.loadUrl("file:///android_asset/offline/index.html");
+        web.loadUrl("file:///android_asset/site/index.html");
     }
     @Override public void onBackPressed() { if (web.canGoBack()) web.goBack(); else super.onBackPressed(); }
 }
