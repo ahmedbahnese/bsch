@@ -1,0 +1,10 @@
+{
+  "name": "bsch-clinics",
+  "version": "1.0.0",
+  "private": true,
+  "description": "BSCH Clinics Arabic clinic booking and queue management system",
+  "scripts": {
+    "start": "python3 app.py",
+    "check": "python3 -m py_compile app.py && node --check static/app.js"
+  }
+}

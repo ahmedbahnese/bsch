@@ -1,0 +1,15 @@
+const {app, BrowserWindow} = require('electron');
+const fs = require('fs');
+const path = require('path');
+const http = require('http');
+const {spawn} = require('child_process');
+const defaultTarget = 'http://127.0.0.1:4173/';
+let serverProcess = null;
+function normalize(value) { value = String(value || '').trim(); if (!/^https?:\/\//i.test(value)) value = 'http://' + value; return value.endsWith('/') ? value : value + '/'; }
+function readConfiguredTarget() { if (process.env.BSCH_SERVER_URL) return normalize(process.env.BSCH_SERVER_URL); for (const file of [path.join(path.dirname(process.execPath), 'server-url.txt'), path.join(__dirname, 'server-url.txt')]) { try { const value = fs.readFileSync(file, 'utf8').trim(); if (value) return normalize(value); } catch (_) {} } return defaultTarget; }
+function startBundledServer() { const exe = path.join(process.resourcesPath, 'server', 'bsch-server.exe'); if (!fs.existsSync(exe)) return; const dataDir = app.getPath('userData'); fs.mkdirSync(dataDir, {recursive: true}); serverProcess = spawn(exe, [], {env: {...process.env, BSCH_HOST: '127.0.0.1', BSCH_PORT: '4173', BSCH_OPERATING_MODE: 'standalone_offline', BSCH_DB_PATH: path.join(dataDir, 'bsch_clinics.sqlite3')}, windowsHide: true, stdio: 'ignore'}); serverProcess.on('error', () => { serverProcess = null; }); }
+function waitForServer(url, attempts = 30, delay = 400) { return new Promise((resolve, reject) => { const check = (left) => { const req = http.get(url, {timeout: 1200}, res => { res.resume(); if (res.statusCode >= 200 && res.statusCode < 500) return resolve(); retry(left); }); req.on('error', () => retry(left)); req.on('timeout', () => { req.destroy(); retry(left); }); function retry(n) { if (n <= 0) return reject(new Error('server_unavailable')); setTimeout(() => check(n - 1), delay); } }; check(attempts); }); }
+function errorPage() { return '<!doctype html><html lang="ar" dir="rtl"><meta charset="utf-8"><title>BSCH Clinics</title><style>body{font-family:Tahoma,Arial;background:#f4f8f8;color:#17324d;padding:40px}.box{max-width:720px;margin:30px auto;background:white;border-radius:18px;padding:30px;box-shadow:0 8px 30px #17324d22}h1{color:#0f948b}</style><div class="box"><h1>BSCH Clinics</h1><h2>تعذر تشغيل الخادم المحلي</h2><p>تأكد من تشغيل الحزمة أو من عنوان الخادم داخل server-url.txt.</p></div></html>'; }
+async function create() { startBundledServer(); const win = new BrowserWindow({width: 1100, height: 760, show: false, backgroundColor: '#f5f8fb', webPreferences: {nodeIntegration: false, contextIsolation: true}}); try { await waitForServer(readConfiguredTarget()); await win.loadURL(readConfiguredTarget()); win.show(); } catch (_) { await win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(errorPage())}`); win.show(); } }
+app.whenReady().then(create);
+app.on('window-all-closed', () => { if (serverProcess) serverProcess.kill(); if (process.platform !== 'darwin') app.quit(); });
