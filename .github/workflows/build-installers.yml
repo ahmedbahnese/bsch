@@ -22,12 +22,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with: {python-version: '3.11'}
+        with:
+          python-version: '3.8.10'
+          architecture: 'x86'
       - name: Build bundled offline server
         shell: pwsh
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements-offline.txt pyinstaller==5.13.2
+          pip install -r requirements-windows7.txt pyinstaller==5.13.2
           pyinstaller --clean --noconfirm desktop/windows7-ia32/bsch-server.spec
           New-Item -ItemType Directory -Force desktop/windows7-ia32/server | Out-Null
           Copy-Item dist/bsch-server.exe desktop/windows7-ia32/server/bsch-server.exe

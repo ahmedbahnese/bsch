@@ -575,6 +575,43 @@ def report_export():
 @app.get('/api/audit-logs')
 @auth_required(MANAGERS)
 def audit_logs():return jsonify(logs=[dict(x) for x in db().execute('SELECT a.*,u.display_name actor_name FROM AuditLogs a LEFT JOIN Users u ON u.id=a.actor_id ORDER BY a.id DESC LIMIT 300')])
+def sync_secret():
+ return os.environ.get('BSCH_SYNC_TOKEN','BSCH-LOCAL-SYNC')
+def sync_authorized():
+ return request.headers.get('X-BSCH-Sync-Token','')==sync_secret() or request.args.get('token','')==sync_secret()
+@app.after_request
+def sync_cors(response):
+ if request.path.startswith('/api/sync'):
+  response.headers['Access-Control-Allow-Origin']='*';response.headers['Access-Control-Allow-Headers']='Content-Type, X-BSCH-Sync-Token';response.headers['Access-Control-Allow-Methods']='GET, POST, OPTIONS'
+ return response
+@app.route('/api/sync/pull',methods=['GET','OPTIONS'])
+def sync_pull():
+ if request.method=='OPTIONS':return ('',204)
+ if not sync_authorized():return jsonify(error='رمز المزامنة غير صحيح'),401
+ since=request.args.get('since','1970-01-01T00:00:00')
+ clinics=[clinic_dict(x) for x in db().execute('SELECT * FROM Clinics WHERE active=1 ORDER BY id')]
+ rows=db().execute('SELECT b.*,c.name clinic_name,q.queue_no,q.state queue_state FROM Bookings b JOIN Clinics c ON c.id=b.clinic_id LEFT JOIN QueueEntries q ON q.booking_id=b.id AND q.id=(SELECT MAX(id) FROM QueueEntries WHERE booking_id=b.id) WHERE b.updated_at>? ORDER BY b.updated_at',(since,)).fetchall()
+ return jsonify(server_time=now(),clinics=clinics,bookings=[dict(x) for x in rows])
+@app.route('/api/sync/push',methods=['POST','OPTIONS'])
+def sync_push():
+ if request.method=='OPTIONS':return ('',204)
+ if not sync_authorized():return jsonify(error='رمز المزامنة غير صحيح'),401
+ data=request.get_json() or {}; incoming=data.get('bookings',[]); accepted=[];updated=[];conflicts=[]
+ for item in incoming:
+  no=str(item.get('booking_no','')).strip() or f"AN{datetime.now().strftime('%y%m%d')}-{secrets.token_hex(3).upper()}"
+  clinic=db().execute('SELECT * FROM Clinics WHERE name=? AND active=1',(str(item.get('clinic_name','')).strip(),)).fetchone()
+  if not clinic:conflicts.append({'booking_no':no,'reason':'العيادة غير موجودة على Windows'});continue
+  existing=db().execute('SELECT * FROM Bookings WHERE booking_no=?',(no,)).fetchone()
+  incoming_time=str(item.get('updated_at') or now())
+  if existing:
+   if incoming_time<=str(existing['updated_at']):continue
+   db().execute('UPDATE Bookings SET patient_name=?,age=?,address=?,phone=?,national_id=?,clinic_id=?,visit_date=?,appointment_time=?,service_type=?,status=?,notes=?,updated_at=? WHERE id=?',(str(item.get('patient_name','')).strip(),str(item.get('age','')),str(item.get('address','')),str(item.get('phone','')).strip(),str(item.get('national_id','')),clinic['id'],str(item.get('visit_date','')),str(item.get('appointment_time','')),str(item.get('service_type','')),str(item.get('status','Pending')),str(item.get('notes','')),incoming_time,existing['id']));updated.append(no);continue
+  required=['patient_name','phone','visit_date','service_type']
+  if any(not str(item.get(k,'')).strip() for k in required):conflicts.append({'booking_no':no,'reason':'بيانات الحجز ناقصة'});continue
+  cur=db().execute('INSERT INTO Bookings(booking_no,patient_name,age,address,phone,national_id,clinic_id,visit_date,appointment_time,service_type,status,source,notes,instructions_snapshot,documents_snapshot,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(no,str(item.get('patient_name','')).strip(),str(item.get('age','')),str(item.get('address','')),str(item.get('phone','')).strip(),str(item.get('national_id','')),clinic['id'],str(item.get('visit_date','')),str(item.get('appointment_time','')),str(item.get('service_type','')),str(item.get('status','Pending')),'android_offline',str(item.get('notes','')),clinic['instructions'],clinic['documents'],str(item.get('created_at') or incoming_time),incoming_time));db().commit()
+  if str(item.get('status','Pending'))=='Confirmed':assign_queue(cur.lastrowid)
+  accepted.append(no)
+ db().commit();return jsonify(server_time=now(),accepted=accepted,updated=updated,conflicts=conflicts)
 @app.errorhandler(404)
 def not_found(e):return (jsonify(error='المسار غير موجود'),404) if request.path.startswith('/api/') else render_template('index.html')
 init_db()

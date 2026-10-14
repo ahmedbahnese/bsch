@@ -8,7 +8,7 @@
 
 - `app.py`: Backend المستقل وواجهات API وقاعدة البيانات والصلاحيات.
 - `templates/` و`static/`: Web Production بنفس تصميم RTL.
-- `mobile/android/`: تطبيق Android يتصل بعنوان Backend قابل للتغيير.
+- `mobile/android/`: تطبيق Android مستقل بقاعدة محلية ومزامنة اختيارية.
 - `desktop/windows7-ia32/`: عميل Windows 7 32-bit للأجهزة الضعيفة.
 - `scripts/`: تشغيل Online وHospital Server وStandalone Offline.
 - `database/`: توثيق SQLite وقواعد الخصوصية.
@@ -70,15 +70,8 @@ BSCH_HOST=0.0.0.0 BSCH_PORT=4173 ./scripts/hospital-server.sh
 
 تحليل الرسائل وAI الخارجي اختياري ويعمل فقط في Online عند إعداد `OPENAI_API_KEY` و`OPENAI_API_BASE` وتفعيل الإعدادات. لا يؤكد AI الحجز ولا يتخذ قراراً طبياً.
 
-## Android
-
-ابنِ التطبيق من `mobile/android` أو حمّل APK Production من GitHub Release. عند أول تشغيل يمكن إدخال عنوان Backend، مثل:
-
-```text
-http://192.168.1.10:4173/
-```
-
-يجب أن يكون الهاتف على نفس شبكة المستشفى في وضع Hospital Server. التطبيق يستخدم نفس Backend، وليس نسخة Static منفصلة.
+## Android مستقل بدون شبكة
+يعمل التطبيق الآن بقاعدة IndexedDB محلية داخل الهاتف، ويتيح الحجز والمتابعة والدور بدون Wi‑Fi أو إنترنت. المزامنة مع Windows اختيارية من شاشة **مزامنة** عند توفر شبكة محلية مؤقتة، وتستخدم رمز `BSCH-LOCAL-SYNC` افتراضياً. لا تعتمد نسخة Android على خادم حتى تعمل.
 
 ## Windows 7 32-bit
 
