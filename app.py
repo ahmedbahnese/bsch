@@ -431,9 +431,10 @@ def create_booking():
 def duplicates():return jsonify(duplicates=similar_bookings(request.args))
 @app.get('/api/bookings/track')
 def track():
- phone=request.args.get('phone','').strip()
- rows=db().execute('SELECT b.*,c.name clinic_name,c.location clinic_location,c.work_days clinic_days,c.start_time clinic_start,c.end_time clinic_end,q.queue_no,q.state queue_state FROM Bookings b JOIN Clinics c ON c.id=b.clinic_id LEFT JOIN QueueEntries q ON q.booking_id=b.id AND q.id=(SELECT MAX(id) FROM QueueEntries WHERE booking_id=b.id) WHERE b.phone=? ORDER BY b.id DESC LIMIT 50',(phone,)).fetchall()
- if not rows:return jsonify(error='لم يتم العثور على حجز بهذا الرقم'),404
+ phone=request.args.get('phone','').strip(); booking_no=request.args.get('booking_no','').strip()
+ if not phone or not booking_no:return jsonify(error='أدخل رقم الهاتف ورقم الحجز للتحقق'),400
+ rows=db().execute('SELECT b.*,c.name clinic_name,c.location clinic_location,c.work_days clinic_days,c.start_time clinic_start,c.end_time clinic_end,q.queue_no,q.state queue_state FROM Bookings b JOIN Clinics c ON c.id=b.clinic_id LEFT JOIN QueueEntries q ON q.booking_id=b.id AND q.id=(SELECT MAX(id) FROM QueueEntries WHERE booking_id=b.id) WHERE b.phone=? AND b.booking_no=? LIMIT 1',(phone,booking_no)).fetchall()
+ if not rows:return jsonify(error='بيانات التحقق غير صحيحة أو الحجز غير موجود'),404
  bookings=[booking_json(x) for x in rows]
  return jsonify(booking=bookings[0],bookings=bookings)
 @app.get('/api/bookings/<int:bid>/confirmation')

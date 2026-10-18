@@ -31,6 +31,11 @@ assert visit, clinic
 payload = {'patient_name':'اختبار استقلال النظام '+str(int(time.time())),'age':'10','address':'اختبار','phone':'010'+str(int(time.time()))[-8:],'national_id':'','clinic_id':clinic['id'],'service_type':(clinic.get('services') or [{'name':'كشف أول مرة'}])[0]['name'],'visit_date':visit,'appointment_time':'09:00'}
 created = ok(s.post(BASE + '/api/bookings', json=payload), 201)
 assert created['booking']['booking_no']
+# Public lookup must not reveal all bookings by phone alone.
+phone_only = s.get(BASE + '/api/bookings/track?phone=' + payload['phone'])
+ok(phone_only, 400)
+tracked = ok(s.get(BASE + '/api/bookings/track?booking_no=' + created['booking']['booking_no'] + '&phone=' + payload['phone']))
+assert tracked['booking']['booking_no'] == created['booking']['booking_no']
 dup_payload = dict(payload); dup_payload['appointment_time'] = '14:00'
 dup = s.post(BASE + '/api/bookings', json=dup_payload)
 ok(dup, 409)
