@@ -75,6 +75,7 @@ def init_db():
  CREATE TABLE IF NOT EXISTS ClinicSchedules(id INTEGER PRIMARY KEY,clinic_id INTEGER NOT NULL REFERENCES Clinics(id) ON DELETE CASCADE,weekday INTEGER NOT NULL,start_time TEXT NOT NULL,end_time TEXT NOT NULL,UNIQUE(clinic_id,weekday));
  CREATE TABLE IF NOT EXISTS ClinicServiceSchedules(id INTEGER PRIMARY KEY,clinic_id INTEGER NOT NULL REFERENCES Clinics(id) ON DELETE CASCADE,service_name TEXT NOT NULL,weekday INTEGER NOT NULL,start_time TEXT NOT NULL,end_time TEXT NOT NULL,daily_limit INTEGER,hourly_limit INTEGER,active INTEGER NOT NULL DEFAULT 1,UNIQUE(clinic_id,service_name,weekday));
  CREATE TABLE IF NOT EXISTS ClinicClosures(id INTEGER PRIMARY KEY,clinic_id INTEGER NOT NULL REFERENCES Clinics(id) ON DELETE CASCADE,closure_date TEXT NOT NULL,reason TEXT NOT NULL DEFAULT '',created_by INTEGER,created_at TEXT NOT NULL,UNIQUE(clinic_id,closure_date));
+ CREATE TABLE IF NOT EXISTS ClinicSpecialDays(id INTEGER PRIMARY KEY,clinic_id INTEGER NOT NULL REFERENCES Clinics(id) ON DELETE CASCADE,special_date TEXT NOT NULL,day_type TEXT NOT NULL DEFAULT 'holiday',booking_limit INTEGER,reason TEXT NOT NULL DEFAULT '',created_by INTEGER,created_at TEXT NOT NULL,UNIQUE(clinic_id,special_date));
  CREATE TABLE IF NOT EXISTS ClinicDoctors(id INTEGER PRIMARY KEY,clinic_id INTEGER NOT NULL REFERENCES Clinics(id) ON DELETE CASCADE,doctor_name TEXT NOT NULL,weekday INTEGER,start_time TEXT,end_time TEXT,active INTEGER NOT NULL DEFAULT 1,created_by INTEGER,created_at TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS Bookings(id INTEGER PRIMARY KEY,booking_no TEXT UNIQUE NOT NULL,patient_name TEXT NOT NULL,age TEXT NOT NULL DEFAULT '',address TEXT NOT NULL DEFAULT '',phone TEXT NOT NULL,national_id TEXT NOT NULL DEFAULT '',clinic_id INTEGER NOT NULL REFERENCES Clinics(id),visit_date TEXT NOT NULL,appointment_time TEXT NOT NULL,service_type TEXT NOT NULL DEFAULT '',status TEXT NOT NULL DEFAULT 'Pending',source TEXT NOT NULL DEFAULT 'system',notes TEXT NOT NULL DEFAULT '',instructions_snapshot TEXT NOT NULL DEFAULT '',documents_snapshot TEXT NOT NULL DEFAULT '',created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS QueueEntries(id INTEGER PRIMARY KEY,booking_id INTEGER NOT NULL REFERENCES Bookings(id) ON DELETE CASCADE,clinic_id INTEGER NOT NULL REFERENCES Clinics(id),queue_date TEXT NOT NULL,queue_no INTEGER NOT NULL,state TEXT NOT NULL DEFAULT 'Waiting',current INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL,UNIQUE(clinic_id,queue_date,queue_no));
@@ -85,7 +86,7 @@ def init_db():
  CREATE TABLE IF NOT EXISTS MessageTemplates(id INTEGER PRIMARY KEY,template_key TEXT UNIQUE NOT NULL,name TEXT NOT NULL,body TEXT NOT NULL,active INTEGER NOT NULL DEFAULT 1,updated_by INTEGER,updated_at TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS IncomingMessages(id INTEGER PRIMARY KEY,channel TEXT NOT NULL,external_id TEXT, sender TEXT NOT NULL DEFAULT '',message_text TEXT NOT NULL,parsed_json TEXT NOT NULL DEFAULT '{}',missing_json TEXT NOT NULL DEFAULT '[]',status TEXT NOT NULL DEFAULT 'received',booking_id INTEGER,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS OutgoingMessages(id INTEGER PRIMARY KEY,channel TEXT NOT NULL,recipient TEXT NOT NULL DEFAULT '',message_text TEXT NOT NULL,template_key TEXT,booking_id INTEGER,status TEXT NOT NULL DEFAULT 'queued',error TEXT NOT NULL DEFAULT '',attempts INTEGER NOT NULL DEFAULT 0,sent_at TEXT,created_at TEXT NOT NULL);
- CREATE INDEX IF NOT EXISTS idx_bookings_phone ON Bookings(phone); CREATE INDEX IF NOT EXISTS idx_bookings_duplicate ON Bookings(patient_name,phone,clinic_id,visit_date); CREATE INDEX IF NOT EXISTS idx_queue_day ON QueueEntries(clinic_id,queue_date);
+ CREATE INDEX IF NOT EXISTS idx_bookings_phone ON Bookings(phone); CREATE INDEX IF NOT EXISTS idx_bookings_duplicate ON Bookings(patient_name,phone,clinic_id,visit_date); CREATE INDEX IF NOT EXISTS idx_queue_day ON QueueEntries(clinic_id,queue_date); CREATE INDEX IF NOT EXISTS idx_clinic_special_days ON ClinicSpecialDays(clinic_id,special_date);
  ''')
  if getattr(conn, 'is_postgres', False): conn.commit()
  for col,typ in [('direct_booking','INTEGER NOT NULL DEFAULT 0'),('services_json',"TEXT NOT NULL DEFAULT '[]'"),('documents',"TEXT NOT NULL DEFAULT ''"),('instructions',"TEXT NOT NULL DEFAULT ''")]: ensure_col(conn,'Clinics',col,typ)
@@ -154,6 +155,8 @@ def booking_json(row):
  if not row:return None
  d=dict(row); d['confirmation_url']=f'/confirmation/{d["id"]}'; return d
 def service_for(clinic,name): return next((x for x in jloads(clinic['services_json']) if x.get('name')==name),None)
+def special_day_for(clinic_id, day):
+ return db().execute('SELECT * FROM ClinicSpecialDays WHERE clinic_id=? AND special_date=?',(clinic_id,str(day))).fetchone()
 def similar_bookings(data, exclude_id=None):
  sql='''SELECT b.*,c.name clinic_name FROM Bookings b JOIN Clinics c ON c.id=b.clinic_id WHERE b.clinic_id=? AND b.visit_date=? AND b.status NOT IN ('Cancelled','NoShow') AND (lower(trim(b.patient_name))=lower(trim(?)) OR b.phone=? OR (?<>'' AND b.national_id=?))'''
  args=[int(data['clinic_id']),str(data['visit_date']),str(data.get('patient_name','')),str(data.get('phone','')),str(data.get('national_id','')),str(data.get('national_id',''))]
@@ -166,8 +169,10 @@ def validate_booking(data,source='system',exclude_id=None,allow_closed=False):
  if not clinic:raise ValueError('العيادة غير متاحة')
  visit=date.fromisoformat(str(data['visit_date']))
  if visit<date.today():raise ValueError('لا يمكن الحجز في تاريخ سابق')
- if not allow_closed and db().execute('SELECT 1 FROM ClinicClosures WHERE clinic_id=? AND closure_date=?',(clinic['id'],str(data['visit_date']))).fetchone():raise ValueError('العيادة مغلقة في هذا اليوم')
- if str(visit.weekday()) not in [x.strip() for x in clinic['work_days'].split(',')]:raise ValueError('اليوم غير مسموح لهذه العيادة')
+ special=special_day_for(clinic['id'],data['visit_date'])
+ if not allow_closed and (db().execute('SELECT 1 FROM ClinicClosures WHERE clinic_id=? AND closure_date=?',(clinic['id'],str(data['visit_date']))).fetchone() or (special and special['day_type']=='holiday')):raise ValueError('العيادة مغلقة في هذا اليوم')
+ special_workday=bool(special and special['day_type']=='workday')
+ if not special_workday and str(visit.weekday()) not in [x.strip() for x in clinic['work_days'].split(',')]:raise ValueError('اليوم غير مسموح لهذه العيادة')
  service=service_for(clinic,str(data['service_type']).strip())
  if not service:raise ValueError('نوع الخدمة غير متاح لهذه العيادة')
  if service.get('direct_only'):raise ValueError('هذه الخدمة بالحضور المباشر فقط ولا يمكن حجزها إلكترونيًا')
@@ -176,7 +181,8 @@ def validate_booking(data,source='system',exclude_id=None,allow_closed=False):
   s=ss[0]; tm=str(data['appointment_time'])
   if not (s['start_time']<=tm<=s['end_time']):raise ValueError('الموعد خارج أوقات الخدمة المتاحة')
  total=db().execute("SELECT COUNT(*) FROM Bookings WHERE clinic_id=? AND visit_date=? AND service_type=? AND status NOT IN ('Cancelled','NoShow')",(clinic['id'],data['visit_date'],data['service_type'])).fetchone()[0]
- limit=min(int(clinic['daily_limit']),int(service.get('limit') or clinic['daily_limit']))
+ clinic_limit=int(special['booking_limit']) if special_workday and special['booking_limit'] is not None else int(clinic['daily_limit'])
+ limit=min(clinic_limit,int(service.get('limit') or clinic_limit))
  if ss and ss[0]['daily_limit']:limit=min(limit,int(ss[0]['daily_limit']))
  if total>=limit:raise ValueError('اكتملت الطاقة الاستيعابية لهذه الخدمة في هذا اليوم')
  if ss and ss[0]['hourly_limit'] and data.get('appointment_time'):
@@ -333,9 +339,11 @@ def clinic_availability(cid):
  start=date_type.today(); items=[]
  for offset in range(0,75):
   day=start+timedelta(days=offset); day_s=day.isoformat()
-  if str(day.weekday()) not in [x.strip() for x in clinic['work_days'].split(',')]:continue
-  if db().execute('SELECT 1 FROM ClinicClosures WHERE clinic_id=? AND closure_date=?',(cid,day_s)).fetchone():continue
+  special=special_day_for(cid,day_s)
+  if (special and special['day_type']=='holiday') or db().execute('SELECT 1 FROM ClinicClosures WHERE clinic_id=? AND closure_date=?',(cid,day_s)).fetchone():continue
+  if not (special and special['day_type']=='workday') and str(day.weekday()) not in [x.strip() for x in clinic['work_days'].split(',')]:continue
   total=db().execute("SELECT COUNT(*) FROM Bookings WHERE clinic_id=? AND visit_date=? AND status NOT IN ('Cancelled','NoShow')",(cid,day_s)).fetchone()[0]
+  clinic_limit=int(special['booking_limit']) if special and special['day_type']=='workday' and special['booking_limit'] is not None else int(clinic['daily_limit'])
   services=jloads(clinic['services_json'])
   available=[]
   for svc in services:
@@ -344,7 +352,7 @@ def clinic_availability(cid):
    if limit<=0:continue
    used=db().execute("SELECT COUNT(*) FROM Bookings WHERE clinic_id=? AND visit_date=? AND service_type=? AND status NOT IN ('Cancelled','NoShow')",(cid,day_s,svc.get('name',''))).fetchone()[0]
    available.append(max(0,limit-used))
-  clinic_remaining=max(0,int(clinic['daily_limit'])-total) if int(clinic['daily_limit'])>0 else None
+  clinic_remaining=max(0,clinic_limit-total) if clinic_limit>0 else None
   remaining=(min(clinic_remaining,max(available)) if available and clinic_remaining is not None else (max(available) if available else (clinic_remaining or 0)))
   if remaining<=0:continue
   items.append({'date':day_s,'weekday':day.strftime('%A'),'weekday_ar':['الإثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت','الأحد'][day.weekday()],'label':day.strftime('%d/%m'),'remaining':remaining})
@@ -369,7 +377,31 @@ def update_clinic(cid):
  db().commit();audit('update_clinic','Clinic',cid,json.dumps(data,ensure_ascii=False));return jsonify(clinic=clinic_dict(db().execute('SELECT * FROM Clinics WHERE id=?',(cid,)).fetchone()),affected_bookings=affected)
 @app.get('/api/clinics/<int:cid>/schedule')
 @auth_required(MANAGERS)
-def clinic_schedule(cid):return jsonify(closures=[dict(x) for x in db().execute('SELECT * FROM ClinicClosures WHERE clinic_id=? ORDER BY closure_date',(cid,))],service_schedules=[dict(x) for x in db().execute('SELECT * FROM ClinicServiceSchedules WHERE clinic_id=? ORDER BY service_name,weekday',(cid,))],doctors=[dict(x) for x in db().execute('SELECT * FROM ClinicDoctors WHERE clinic_id=? ORDER BY weekday,doctor_name',(cid,))])
+def clinic_schedule(cid):return jsonify(closures=[dict(x) for x in db().execute('SELECT * FROM ClinicClosures WHERE clinic_id=? ORDER BY closure_date',(cid,))],special_days=[dict(x) for x in db().execute('SELECT * FROM ClinicSpecialDays WHERE clinic_id=? ORDER BY special_date',(cid,))],service_schedules=[dict(x) for x in db().execute('SELECT * FROM ClinicServiceSchedules WHERE clinic_id=? ORDER BY service_name,weekday',(cid,))],doctors=[dict(x) for x in db().execute('SELECT * FROM ClinicDoctors WHERE clinic_id=? ORDER BY weekday,doctor_name',(cid,))])
+def special_day_payload(row):
+ d=dict(row); d['booking_limit']=int(d['booking_limit']) if d.get('booking_limit') is not None else None; return d
+@app.post('/api/clinics/<int:cid>/special-days')
+@auth_required(MANAGERS)
+def upsert_special_day(cid):
+ d=request.get_json() or {}; day=str(d.get('special_date','')).strip(); day_type=str(d.get('day_type','')).strip(); reason=str(d.get('reason','')).strip()
+ if not db().execute('SELECT id FROM Clinics WHERE id=?',(cid,)).fetchone():return jsonify(error='العيادة غير موجودة'),404
+ if not day:return jsonify(error='تاريخ اليوم الخاص مطلوب'),400
+ try: date.fromisoformat(day)
+ except ValueError:return jsonify(error='التاريخ غير صحيح'),400
+ if day_type not in {'workday','holiday'}:return jsonify(error='نوع اليوم يجب أن يكون يوم عمل خاص أو يوم إجازة'),400
+ limit=d.get('booking_limit')
+ if day_type=='workday':
+  try: limit=int(limit)
+  except (TypeError,ValueError):return jsonify(error='حدد عدد الحجوزات لليوم الخاص'),400
+  if limit<1:return jsonify(error='عدد الحجوزات يجب أن يكون أكبر من صفر'),400
+ else: limit=None
+ db().execute('INSERT INTO ClinicSpecialDays(clinic_id,special_date,day_type,booking_limit,reason,created_by,created_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(clinic_id,special_date) DO UPDATE SET day_type=excluded.day_type,booking_limit=excluded.booking_limit,reason=excluded.reason,created_by=excluded.created_by,created_at=excluded.created_at',(cid,day,day_type,limit,reason,session.get('user_id'),now())); db().commit(); audit('upsert_special_clinic_day','Clinic',cid,json.dumps({'date':day,'type':day_type,'limit':limit,'reason':reason},ensure_ascii=False)); row=db().execute('SELECT * FROM ClinicSpecialDays WHERE clinic_id=? AND special_date=?',(cid,day)).fetchone(); affected=[]
+ if day_type=='holiday': affected=[dict(x) for x in db().execute("SELECT id,booking_no,patient_name,phone,visit_date,appointment_time,status FROM Bookings WHERE clinic_id=? AND visit_date=? AND status NOT IN ('Cancelled','NoShow')",(cid,day)).fetchall()]
+ return jsonify(ok=True,special_day=special_day_payload(row),affected_bookings=affected)
+@app.delete('/api/clinics/<int:cid>/special-days/<day>')
+@auth_required(MANAGERS)
+def delete_special_day(cid,day):
+ db().execute('DELETE FROM ClinicSpecialDays WHERE clinic_id=? AND special_date=?',(cid,day)); db().commit(); audit('delete_special_clinic_day','Clinic',cid,day); return jsonify(ok=True)
 @app.post('/api/clinics/<int:cid>/closures')
 @auth_required(MANAGERS)
 def closure(cid):
