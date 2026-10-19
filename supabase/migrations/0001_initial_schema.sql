@@ -1,6 +1,6 @@
 -- BSCH Clinics / Supabase baseline schema
--- This migration is prepared for review and has NOT been applied automatically.
--- Apply only to the intended Supabase project after backup and approval.
+-- Applied successfully to Supabase project xqgjggvydcheqpjmrmgq on 2026-10-19.
+-- The migration remains idempotent for extensions, tables, indexes and functions.
 
 create extension if not exists pgcrypto;
 create extension if not exists btree_gist;
